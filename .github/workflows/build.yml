@@ -1,0 +1,48 @@
+name: Build F2 diagnostic 1.0.3
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf unzip curl python3
+      - name: Get SQLite amalgamation
+        run: |
+          curl -fL --retry 3 -o sqlite.zip https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+          unzip -q sqlite.zip
+          mv sqlite-amalgamation-3450300 sqlite
+      - name: Build ARM program
+        run: |
+          arm-linux-gnueabihf-gcc -O2 -std=c11 -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite -c sqlite/sqlite3.c -o sqlite3.o
+          arm-linux-gnueabihf-gcc -O2 -std=c11 -Wall -Wextra -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -I sqlite -c reader.c -o reader.o
+          arm-linux-gnueabihf-gcc reader.o sqlite3.o -lm -ldl -lpthread -o f2_recover_sqlite_arm
+      - name: Inspect binary
+        run: |
+          file f2_recover_sqlite_arm
+          arm-linux-gnueabihf-readelf -l f2_recover_sqlite_arm | grep -F /lib/ld-linux-armhf.so.3
+          arm-linux-gnueabihf-readelf -d f2_recover_sqlite_arm | tee dependencies.txt
+          if grep -q libsqlite3.so dependencies.txt; then exit 1; fi
+      - name: Package IPK
+        run: python3 package.py
+      - name: Inspect package
+        run: |
+          python3 - <<'PY'
+          import tarfile,io
+          with tarfile.open('f2_service_diagnostic_1.0.3.drcoffee.ipk') as f:
+              assert {'./debian-binary','./control.tar.gz','./data.tar.gz'}.issubset(f.getnames())
+              with tarfile.open(fileobj=io.BytesIO(f.extractfile('./data.tar.gz').read()),mode='r:gz') as t:
+                  assert t.getnames()==['./usr/local/bin/f2_recover_sqlite_arm']
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: F2-diagnostic-1.0.3-IPK
+          path: |
+            f2_service_diagnostic_1.0.3.drcoffee.ipk
+            f2_recover_sqlite_arm
+            dependencies.txt
