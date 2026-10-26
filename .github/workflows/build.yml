@@ -1,4 +1,4 @@
-name: Build F2 diagnostic 1.0.3
+name: Build F2 diagnostic 1.0.4 (glibc <= 2.26)
 on:
   push:
     branches: [main]
@@ -8,41 +8,53 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf unzip curl python3
-      - name: Get SQLite amalgamation
-        run: |
-          curl -fL --retry 3 -o sqlite.zip https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
-          unzip -q sqlite.zip
-          mv sqlite-amalgamation-3450300 sqlite
-      - name: Build ARM program
-        run: |
-          arm-linux-gnueabihf-gcc -O2 -std=c11 -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite -c sqlite/sqlite3.c -o sqlite3.o
-          arm-linux-gnueabihf-gcc -O2 -std=c11 -Wall -Wextra -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -I sqlite -c reader.c -o reader.o
-          arm-linux-gnueabihf-gcc reader.o sqlite3.o -lm -ldl -lpthread -o f2_recover_sqlite_arm
-      - name: Inspect binary
-        run: |
-          file f2_recover_sqlite_arm
-          arm-linux-gnueabihf-readelf -l f2_recover_sqlite_arm | grep -F /lib/ld-linux-armhf.so.3
-          arm-linux-gnueabihf-readelf -d f2_recover_sqlite_arm | tee dependencies.txt
-          if grep -q libsqlite3.so dependencies.txt; then exit 1; fi
-      - name: Package IPK
-        run: python3 package.py
-      - name: Inspect package
+      - name: Prepare version 1.0.4
         run: |
           python3 - <<'PY'
-          import tarfile,io
-          with tarfile.open('f2_service_diagnostic_1.0.3.drcoffee.ipk') as f:
+          from pathlib import Path
+          p=Path('package.py')
+          s=p.read_text()
+          assert '1.0.3' in s
+          p.write_text(s.replace('1.0.3','1.0.4'))
+          PY
+      - name: Build with Debian 9 (glibc 2.24 sysroot)
+        run: |
+          docker run --rm -v "$GITHUB_WORKSPACE:/work" -w /work debian:stretch /bin/bash -euxc '
+            printf "deb [trusted=yes] http://archive.debian.org/debian stretch main\n" > /etc/apt/sources.list
+            printf "Acquire::Check-Valid-Until \"false\";\nAcquire::Check-Date \"false\";\n" > /etc/apt/apt.conf.d/99archive
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf ca-certificates curl unzip python3 file
+            curl -fL --retry 3 -o sqlite.zip https://www.sqlite.org/2024/sqlite-amalgamation-3450300.zip
+            unzip -q sqlite.zip
+            mv sqlite-amalgamation-3450300 sqlite
+            arm-linux-gnueabihf-gcc -O2 -std=c11 -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite -c sqlite/sqlite3.c -o sqlite3.o
+            arm-linux-gnueabihf-gcc -O2 -std=c11 -Wall -Wextra -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -I sqlite -c reader.c -o reader.o
+            arm-linux-gnueabihf-gcc reader.o sqlite3.o -lm -ldl -lpthread -o f2_recover_sqlite_arm
+            arm-linux-gnueabihf-readelf -l f2_recover_sqlite_arm | grep -F /lib/ld-linux-armhf.so.3
+            arm-linux-gnueabihf-readelf -d f2_recover_sqlite_arm | tee dependencies.txt
+            ! grep -q libsqlite3.so dependencies.txt
+            arm-linux-gnueabihf-readelf --version-info f2_recover_sqlite_arm | tee symbol_versions.txt
+            python3 -c '\''import re; s=open("symbol_versions.txt").read(); vs=[tuple(map(int,v.split("."))) for v in re.findall(r"GLIBC_([0-9]+\\.[0-9]+(?:\\.[0-9]+)?)",s)]; assert all(v <= (2,26) for v in vs),vs; print("GLIBC versions OK:",vs)'\''
+            python3 package.py
+          '
+      - name: Verify resulting package
+        run: |
+          python3 - <<'PY'
+          import tarfile,io,pathlib
+          p=pathlib.Path('f2_service_diagnostic_1.0.4.drcoffee.ipk')
+          assert p.exists() and p.stat().st_size>10000
+          with tarfile.open(p) as f:
               assert {'./debian-binary','./control.tar.gz','./data.tar.gz'}.issubset(f.getnames())
               with tarfile.open(fileobj=io.BytesIO(f.extractfile('./data.tar.gz').read()),mode='r:gz') as t:
-                  assert t.getnames()==['./usr/local/bin/f2_recover_sqlite_arm']
+                  assert './usr/local/bin/f2_recover_sqlite_arm' in t.getnames()
+          print('IPK OK:',p,p.stat().st_size)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: F2-diagnostic-1.0.3-IPK
+          name: F2-diagnostic-1.0.4-IPK
           path: |
-            f2_service_diagnostic_1.0.3.drcoffee.ipk
+            f2_service_diagnostic_1.0.4.drcoffee.ipk
             f2_recover_sqlite_arm
             dependencies.txt
+            symbol_versions.txt
+
