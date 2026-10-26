@@ -28,7 +28,7 @@ jobs:
             printf "deb [trusted=yes] http://archive.debian.org/debian stretch main\n" > /etc/apt/sources.list
             printf "Acquire::Check-Valid-Until \"false\";\nAcquire::Check-Date \"false\";\n" > /etc/apt/apt.conf.d/99archive
             apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf binutils-arm-linux-gnueabihf python3 file
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends gcc-arm-linux-gnueabihf libc6-dev-armhf-cross linux-libc-dev-armhf-cross binutils-arm-linux-gnueabihf python3 file
             arm-linux-gnueabihf-gcc -O2 -std=c11 -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite -c sqlite/sqlite3.c -o sqlite3.o
             arm-linux-gnueabihf-gcc -O2 -std=c11 -Wall -Wextra -march=armv7-a -mfpu=vfpv3 -mfloat-abi=hard -I sqlite -c reader.c -o reader.o
             arm-linux-gnueabihf-gcc reader.o sqlite3.o -lm -ldl -lpthread -o f2_recover_sqlite_arm
