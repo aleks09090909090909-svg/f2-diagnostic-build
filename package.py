@@ -16,7 +16,7 @@ def archive(entries):
 ct=archive([('./control',control,0o644),('./postinst',postinst,0o755)])
 dt=archive([('./usr/local/bin/f2_recover_sqlite_arm',exe.read_bytes(),0o755)])
 out=root/'f2_service_diagnostic_1.0.3.drcoffee.ipk'
-with tarfile.open(out,'w',format=tarfile.GNU_FORMAT) as tar:
+with tarfile.open(str(out),'w',format=tarfile.GNU_FORMAT) as tar:
  for name,data in [('./debian-binary',b'2.0\n'),('./control.tar.gz',ct),('./data.tar.gz',dt)]:
   t=tarfile.TarInfo(name);t.size=len(data);t.mode=0o644;tar.addfile(t,io.BytesIO(data))
 print(out)
