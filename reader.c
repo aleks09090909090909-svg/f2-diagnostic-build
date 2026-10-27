@@ -15,6 +15,52 @@ static int type_of(const char *name){
  if(strstr(b,"drink")||strstr(b,"cup")||strstr(b,"sale")||strstr(b,"order")||strstr(b,"count")||strstr(b,"coffee")||strstr(b,"product")||strstr(b,"stat"))return 1;
  return 0;
 }
+
+/* Probe confirmed marker across every SQLite table, including WAL-visible rows.
+   Never call untrusted SQL functions, only quoted identifiers and SELECT.
+   Limit each table to 5000 rows, each value to 16384 bytes. */
+static void probe_code5(sqlite3 *db,const char *usb){
+ char path[1024];snprintf(path,sizeof(path),"%s/F2_code5_search.tsv",usb);
+ FILE *out=fopen(path,"wb");if(!out)return;
+ fputs("База\tТаблица\tСтрока\tПоле\tСовпадение\tКонтекст\tПроверено строк\tПримечание\n",out);
+ sqlite3_stmt *tables=NULL;int hits=0,examined=0;
+ if(sqlite3_prepare_v2(db,"SELECT name FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'",-1,&tables,NULL)==SQLITE_OK){
+  while(sqlite3_step(tables)==SQLITE_ROW&&examined<200){
+   const char *orig=(const char*)sqlite3_column_text(tables,0);if(!orig)continue;
+   char name[240];snprintf(name,sizeof(name),"%s",orig);
+   char ident[500];int k=0;
+   for(const char *p=name;*p&&k<495;p++){if(*p=='"')ident[k++]='"';ident[k++]=*p;}ident[k]=0;
+   char sql[700];snprintf(sql,sizeof(sql),"SELECT * FROM \"%s\" LIMIT 5000",ident);
+   sqlite3_stmt *rows=NULL;
+   if(sqlite3_prepare_v2(db,sql,-1,&rows,NULL)!=SQLITE_OK)continue;
+   examined++;int nrow=0;
+   while(sqlite3_step(rows)==SQLITE_ROW && nrow<5000 && hits<500){
+    nrow++;int cols=sqlite3_column_count(rows);
+    for(int col=0;col<cols&&col<80;col++){
+     const char *cn=sqlite3_column_name(rows,col);if(!cn)continue;
+     const unsigned char *v=sqlite3_column_text(rows,col);if(!v || sqlite3_column_type(rows,col)==SQLITE_BLOB)continue;
+     int n=sqlite3_column_bytes(rows,col);if(n>16384)n=16384;
+     for(int j=0;j+5<=n;j++){
+      if((v[j]=='c'||v[j]=='C')&&(v[j+1]=='o'||v[j+1]=='O')&&(v[j+2]=='d'||v[j+2]=='D')&&(v[j+3]=='e'||v[j+3]=='E')&&v[j+4]=='5'){
+       int st=j>90?j-90:0,ed=j+95<n?j+95:n;
+       fputs("machine.db\t",out);cell(out,(const unsigned char*)name);fprintf(out,"\t%d\t",nrow);
+       cell(out,(const unsigned char*)cn);fputs("\tcode5\t",out);
+       for(int z=st;z<ed;z++){int ch=v[z];fputc((ch<32||ch==9||ch==10||ch==13)?' ':ch,out);}
+       fprintf(out,"\t%d\tСовпадение в SQLite; требуется подтверждение назначения\n",nrow);
+       hits++;break;
+      }
+     }
+    }
+   }
+   if(hits>=500){sqlite3_finalize(rows);break;}
+   sqlite3_finalize(rows);
+  }
+ }
+ if(tables)sqlite3_finalize(tables);
+ if(hits==0)fprintf(out,"machine.db\t(все доступные)\t\t\tcode5\tНе найдено в текстовых значениях\t\tВозможен журнал HMI или MCU; отсутствие совпадений не значит отсутствие ошибки\n");
+ fclose(out);
+ fprintf(stdout,"CODE5_SQLITE_TABLES_SCANNED=%d\nCODE5_SQLITE_MATCHES=%d\n",examined,hits);
+}
 static void export_observations(sqlite3 *db,const char *usb){
  char dp[1024],ep[1024],sp[1024];
  snprintf(dp,sizeof(dp),"%s/F2_drink_statistics.tsv",usb);
@@ -95,7 +141,7 @@ int main(int argc,char **argv){
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.9-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.10-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
@@ -181,6 +227,7 @@ int main(int argc,char **argv){
   fclose(scf);
  }
  export_observations(db,usb);
+ probe_code5(db,usb);
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
