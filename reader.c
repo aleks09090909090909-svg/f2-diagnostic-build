@@ -10,7 +10,7 @@ int main(int argc,char **argv){
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.6-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.7-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
@@ -63,6 +63,38 @@ int main(int argc,char **argv){
   fclose(sf);
   fprintf(stdout,"OK: %s\n",settings_path);
  } else fprintf(stderr,"WARN: cannot create F2_settings.tsv: %s\n",strerror(errno));
+
+ /* Statistics: document available candidate tables, without guessing counts. */
+ char statpath[1024],schema_path[1024];
+ snprintf(statpath,sizeof(statpath),"%s/F2_drink_statistics.tsv",usb);
+ snprintf(schema_path,sizeof(schema_path),"%s/F2_statistics_sources.tsv",usb);
+ FILE *stf=fopen(statpath,"wb");
+ if(stf){fputs("Напиток\tПриготовлено, раз\tПримечание\n",stf);fputs("Нет подтвержденных данных\t\tДоступные таблицы перечислены в листе Источники\n",stf);fclose(stf);}
+ FILE *scf=fopen(schema_path,"wb");
+ if(scf){
+  fputs("Таблица\tСтолбцы\tТип данных\n",scf);
+  sqlite3_stmt *list=NULL;
+  if(sqlite3_prepare_v2(db,"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",-1,&list,NULL)==SQLITE_OK){
+   while(sqlite3_step(list)==SQLITE_ROW){
+    const char *tn=(const char*)sqlite3_column_text(list,0);if(!tn)continue;
+    char lower[256];snprintf(lower,sizeof(lower),"%s",tn);
+    for(char *p=lower;*p;p++)if(*p>='A'&&*p<='Z')*p+=32;
+    if(!strstr(lower,"drink")&&!strstr(lower,"cup")&&!strstr(lower,"sale")&&!strstr(lower,"order")&&!strstr(lower,"count")&&!strstr(lower,"coffee")&&!strstr(lower,"product")&&!strstr(lower,"stat"))continue;
+    char q[512];snprintf(q,sizeof(q),"PRAGMA table_info(\"%s\")",tn);
+    sqlite3_stmt *cols=NULL;
+    if(sqlite3_prepare_v2(db,q,-1,&cols,NULL)!=SQLITE_OK)continue;
+    while(sqlite3_step(cols)==SQLITE_ROW){
+     const char *cn=(const char*)sqlite3_column_text(cols,1);
+     const char *ct=(const char*)sqlite3_column_text(cols,2);
+     if(!cn)continue;
+     fprintf(scf,"%s\t%s\t%s\n",tn,cn,ct?ct:"");
+    }
+    sqlite3_finalize(cols);
+   }
+  }
+  if(list)sqlite3_finalize(list);
+  fclose(scf);
+ }
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
