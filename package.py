@@ -8,7 +8,8 @@ if not staticexe.is_file():raise SystemExit('Missing static ARM executable')
 head=exe.read_bytes()[:20]
 if head[:4]!=b'\x7fELF' or head[4]!=1 or int.from_bytes(head[18:20],'little')!=40:raise SystemExit('Not ARM32 ELF')
 control=b'Package: f2_service_diagnostic\nVersion: 1.0.5\nArchitecture: armv7l\nMaintainer: service\nDescription: F2 read-only diagnostic SQLite WAL\n'
-postinst=b'#!/bin/sh\nUSB=/mnt/nand_disk\nLOG="$USB/F2_diagnostic_status.txt"\nif [ ! -d "$USB" ]; then exit 1; fi\nrm -f "$USB/F2_passwords.txt"\n/usr/local/bin/f2_recover_sqlite_arm /root/machine.db "$USB" > "$LOG" 2>&1\nRC=$?\nsync\nexit "$RC"\n'
+postinst="#!/bin/sh\nUSB=/mnt/nand_disk\nLOG=\"$USB/F2_diagnostic_status.txt\"\nif [ ! -d \"$USB\" ]; then exit 1; fi\nrm -f \"$USB/F2_passwords.txt\"\nif [ -e /lib/ld-linux-armhf.so.3 ]; then\n  EXE=/usr/local/bin/f2_recover_sqlite_arm\nelse\n  EXE=/usr/local/bin/f2_recover_sqlite_static_arm\nfi\necho \"F2_PACKAGE_VERSION=1.0.5\" > \"$LOG\"\necho \"SELECTED_EXECUTABLE=$EXE\" >> \"$LOG\"\n\"$EXE\" /root/machine.db \"$USB\" >> \"$LOG\" 2>&1\nRC=$?\nsync\nexit \"$RC\"\n".encode()
+
 def archive(entries):
  b=io.BytesIO()
  with tarfile.open(fileobj=b,mode='w:gz',format=tarfile.GNU_FORMAT) as tar:
