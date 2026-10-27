@@ -4,13 +4,69 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+static void cell(FILE *f,const unsigned char *v){
+ if(!v)return;
+ int n=0;while(*v && n<400){unsigned char c=*v++;fputc((c==9||c==10||c==13||c<32)?' ':c,f);n++;}
+}
+static int type_of(const char *name){
+ char b[256];snprintf(b,sizeof(b),"%s",name);
+ for(char *p=b;*p;p++)if(*p>='A'&&*p<='Z')*p+=32;
+ if(strstr(b,"error")||strstr(b,"alarm")||strstr(b,"fault")||strstr(b,"warn")||strstr(b,"trouble")||strstr(b,"exception"))return 2;
+ if(strstr(b,"drink")||strstr(b,"cup")||strstr(b,"sale")||strstr(b,"order")||strstr(b,"count")||strstr(b,"coffee")||strstr(b,"product")||strstr(b,"stat"))return 1;
+ return 0;
+}
+static void export_observations(sqlite3 *db,const char *usb){
+ char dp[1024],ep[1024],sp[1024];
+ snprintf(dp,sizeof(dp),"%s/F2_drink_statistics.tsv",usb);
+ snprintf(ep,sizeof(ep),"%s/F2_error_records.tsv",usb);
+ snprintf(sp,sizeof(sp),"%s/F2_statistics_sources.tsv",usb);
+ FILE *drink=fopen(dp,"wb"),*err=fopen(ep,"wb"),*schema=fopen(sp,"wb");
+ if(drink)fputs("Таблица\tСтрока\tПоле\tЗначение\tПримечание\n",drink);
+ if(err)fputs("Таблица\tСтрока\tПоле\tЗначение\tПримечание\n",err);
+ if(schema)fputs("Таблица\tПоле\tТип\tСтрок исследовано\tКатегория\n",schema);
+ sqlite3_stmt *t=NULL;
+ if(sqlite3_prepare_v2(db,"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",-1,&t,NULL)==SQLITE_OK){
+  int tables=0;
+  while(sqlite3_step(t)==SQLITE_ROW && tables<150){
+   const char *raw=(const char*)sqlite3_column_text(t,0);if(!raw)continue;
+   char name[256];snprintf(name,sizeof(name),"%s",raw);int kind=type_of(name);
+   if(!kind)continue;tables++;
+   char escaped[520];int j=0;
+   for(const char *p=name;*p&&j<510;p++){if(*p=='"')escaped[j++]='"';escaped[j++]=*p;}escaped[j]=0;
+   char sql[640];snprintf(sql,sizeof(sql),"SELECT * FROM \"%s\" LIMIT 1000",escaped);
+   sqlite3_stmt *rows=NULL;if(sqlite3_prepare_v2(db,sql,-1,&rows,NULL)!=SQLITE_OK)continue;
+   FILE *out=(kind==2)?err:drink;int row=0,cols=sqlite3_column_count(rows);
+   while(sqlite3_step(rows)==SQLITE_ROW && row<1000){
+    row++;for(int col=0;col<cols&&col<50;col++){
+     const char *cn=sqlite3_column_name(rows,col);if(!cn)continue;
+     if(type_of(cn)==2 && kind!=2){} /* Original field kept for traceability. */
+     char tmp[128];snprintf(tmp,sizeof(tmp),"%s",cn);
+     for(char *p=tmp;*p;p++)if(*p>='A'&&*p<='Z')*p+=32;
+     if(strstr(tmp,"password")||strstr(tmp,"token")||strstr(tmp,"secret")||strstr(tmp,"auth")||strstr(tmp,"key")||strstr(tmp,"mac")||strstr(tmp,"serial")||strstr(tmp,"uuid"))continue;
+     if(!out)continue;
+     cell(out,(const unsigned char*)name);fprintf(out,"\t%d\t",row);cell(out,(const unsigned char*)cn);fputc('\t',out);
+     if(sqlite3_column_type(rows,col)==SQLITE_BLOB)fputs("[BLOB скрыт]",out);
+     else cell(out,sqlite3_column_text(rows,col));
+     fputs("\tИсходные данные, интерпретация не подтверждена\n",out);
+    }
+   }
+   if(schema)for(int col=0;col<cols&&col<50;col++){
+    cell(schema,(const unsigned char*)name);fputc('\t',schema);cell(schema,(const unsigned char*)sqlite3_column_name(rows,col));
+    fprintf(schema,"\t%s\t%d\t%s\n",sqlite3_column_decltype(rows,col)?sqlite3_column_decltype(rows,col):"",row,kind==2?"ошибки":"напитки/статистика");
+   }
+   sqlite3_finalize(rows);
+  }
+ }
+ if(t)sqlite3_finalize(t);
+ if(drink)fclose(drink);if(err)fclose(err);if(schema)fclose(schema);
+}
 static const char *keys[4]={"password","password2","password3","passwordSw"};
 int main(int argc,char **argv){
  const char *dbpath=argc>1?argv[1]:"/root/machine.db";
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.7-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.8-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
@@ -95,6 +151,7 @@ int main(int argc,char **argv){
   if(list)sqlite3_finalize(list);
   fclose(scf);
  }
+ export_observations(db,usb);
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
