@@ -21,7 +21,7 @@ static void export_observations(sqlite3 *db,const char *usb){
  snprintf(ep,sizeof(ep),"%s/F2_error_records.tsv",usb);
  snprintf(sp,sizeof(sp),"%s/F2_statistics_sources.tsv",usb);
  FILE *drink=fopen(dp,"wb"),*err=fopen(ep,"wb"),*schema=fopen(sp,"wb");
- if(drink)fputs("Таблица\tСтрока\tПоле\tЗначение\tПримечание\n",drink);
+ if(drink)fputs("Напиток\tСтатус записи\tКоличество записей\tОписание\n",drink);
  if(err)fputs("Таблица\tСтрока\tПоле\tЗначение\tПримечание\n",err);
  if(schema)fputs("Таблица\tПоле\tТип\tСтрок исследовано\tКатегория\n",schema);
  sqlite3_stmt *t=NULL;
@@ -35,7 +35,7 @@ static void export_observations(sqlite3 *db,const char *usb){
    for(const char *p=name;*p&&j<510;p++){if(*p=='"')escaped[j++]='"';escaped[j++]=*p;}escaped[j]=0;
    char sql[640];snprintf(sql,sizeof(sql),"SELECT * FROM \"%s\" LIMIT 1000",escaped);
    sqlite3_stmt *rows=NULL;if(sqlite3_prepare_v2(db,sql,-1,&rows,NULL)!=SQLITE_OK)continue;
-   FILE *out=(kind==2)?err:drink;int row=0,cols=sqlite3_column_count(rows);
+   FILE *out=(kind==2)?err:NULL;int row=0,cols=sqlite3_column_count(rows);
    while(sqlite3_step(rows)==SQLITE_ROW && row<1000){
     row++;for(int col=0;col<cols&&col<50;col++){
      const char *cn=sqlite3_column_name(rows,col);if(!cn)continue;
@@ -58,6 +58,35 @@ static void export_observations(sqlite3 *db,const char *usb){
   }
  }
  if(t)sqlite3_finalize(t);
+ /* Vendor database confirms yk_device_make.drink_uuid -> yk_asset_drink.uuid.
+    status semantics are not established: show counts separated by status. */
+ if(drink){
+  sqlite3_stmt *groups=NULL;
+  const char *q="SELECT COALESCE(NULLIF(d.name,''),NULLIF(d.eng_name,''),m.drink_uuid,'Неизвестно'),"
+                "COALESCE(CAST(m.status AS TEXT),'NULL'),COUNT(*) "
+                "FROM yk_device_make m LEFT JOIN yk_asset_drink d ON m.drink_uuid=d.uuid "
+                "GROUP BY m.drink_uuid,m.status ORDER BY COUNT(*) DESC LIMIT 3000";
+  if(sqlite3_prepare_v2(db,q,-1,&groups,NULL)==SQLITE_OK){
+   int rows=0;
+   while(sqlite3_step(groups)==SQLITE_ROW){
+    cell(drink,sqlite3_column_text(groups,0));fputc('\t',drink);
+    cell(drink,sqlite3_column_text(groups,1));fprintf(drink,"\t%lld\t",sqlite3_column_int64(groups,2));
+    fputs("Записи истории приготовления, статус успеха пока не расшифрован\n",drink);rows++;
+   }
+   if(!rows)fputs("Записи отсутствуют\t\t0\tИстория приготовления пуста\n",drink);
+  }else fputs("Нет совместимой таблицы\t\t\tНе удалось прочитать историю приготовления\n",drink);
+  if(groups)sqlite3_finalize(groups);
+ }
+ /* Also inspect service history. These are not confirmed fault codes. */
+ if(err){
+  sqlite3_stmt *maint=NULL;
+  if(sqlite3_prepare_v2(db,"SELECT cmd,step,start_at,end_at FROM yk_asset_maintain_record ORDER BY start_at DESC LIMIT 500",-1,&maint,NULL)==SQLITE_OK){
+   int row=0;while(sqlite3_step(maint)==SQLITE_ROW){
+    row++;const char *names[]={"cmd","step","start_at","end_at"};
+    for(int i=0;i<4;i++)fprintf(err,"История обслуживания\t%d\t%s\t%lld\tСервисная запись, не код ошибки\n",row,names[i],sqlite3_column_int64(maint,i));
+   }
+  }if(maint)sqlite3_finalize(maint);
+ }
  if(drink)fclose(drink);if(err)fclose(err);if(schema)fclose(schema);
 }
 static const char *keys[4]={"password","password2","password3","passwordSw"};
@@ -66,7 +95,7 @@ int main(int argc,char **argv){
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.8-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.9-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
