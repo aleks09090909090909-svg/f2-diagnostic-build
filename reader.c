@@ -61,6 +61,50 @@ static void probe_code5(sqlite3 *db,const char *usb){
  fclose(out);
  fprintf(stdout,"CODE5_SQLITE_TABLES_SCANNED=%d\nCODE5_SQLITE_MATCHES=%d\n",examined,hits);
 }
+
+/* Deeper targeted forensic probe. SQLite is opened strictly read-only.
+   Enumerates schema in all DBs passed as arguments; bounds sampling. */
+static void forensic(sqlite3 *db,const char *label,FILE *out){
+ sqlite3_stmt *tabs=NULL;int nt=0,found=0;
+ if(sqlite3_prepare_v2(db,"SELECT name,type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%'",-1,&tabs,NULL)!=SQLITE_OK)return;
+ while(sqlite3_step(tabs)==SQLITE_ROW&&nt++<300){
+  const char *raw=(const char*)sqlite3_column_text(tabs,0);if(!raw)continue;
+  char name[240];snprintf(name,sizeof(name),"%s",raw);
+  char quoted[500];int q=0;for(const char *p=name;*p&&q<490;p++){if(*p=='"')quoted[q++]='"';quoted[q++]=*p;}quoted[q]=0;
+  char query[650];snprintf(query,sizeof(query),"SELECT * FROM \"%s\" LIMIT 8000",quoted);
+  sqlite3_stmt *st=NULL;if(sqlite3_prepare_v2(db,query,-1,&st,NULL)!=SQLITE_OK)continue;
+  int ncol=sqlite3_column_count(st),rows=0;
+  int suspect=type_of(name)==2;
+  for(int col=0;col<ncol;col++){
+   const char *cn=sqlite3_column_name(st,col);
+   if(cn&&type_of(cn)==2)suspect=1;
+  }
+  while(sqlite3_step(st)==SQLITE_ROW&&rows++<8000&&found<500){
+   for(int col=0;col<ncol&&col<80;col++){
+    const char *cn=sqlite3_column_name(st,col);if(!cn)continue;
+    int ty=sqlite3_column_type(st,col);
+    const unsigned char *value=sqlite3_column_text(st,col);if(!value)continue;
+    int sz=sqlite3_column_bytes(st,col);if(sz>32768)sz=32768;
+    int hit=0;
+    for(int pos=0;pos+5<=sz;pos++){
+     if((value[pos]=='c'||value[pos]=='C')&&(value[pos+1]=='o'||value[pos+1]=='O')&&(value[pos+2]=='d'||value[pos+2]=='D')&&(value[pos+3]=='e'||value[pos+3]=='E')&&value[pos+4]=='5'){hit=1;break;}
+    }
+    /* Numeric 5 only in plausible code/error columns or tables. */
+    if(!hit&&suspect&&ty==SQLITE_INTEGER&&sqlite3_column_int64(st,col)==5)hit=2;
+    if(!hit)continue;
+    fprintf(out,"%s\t",label);cell(out,(const unsigned char*)name);fprintf(out,"\t%d\t",rows);
+    cell(out,(const unsigned char*)cn);
+    fprintf(out,"\t%s\t",hit==2?"Число 5":"code5");
+    int cap=sz<220?sz:220;
+    for(int k=0;k<cap;k++)fputc((value[k]>=32&&value[k]!=9&&value[k]!=127)?value[k]:' ',out);
+    fprintf(out,"\t%s\n",hit==2?"Возможный код; значение требует проверки":"Текстовое совпадение");found++;
+   }
+  }
+  sqlite3_finalize(st);
+ }
+ sqlite3_finalize(tabs);
+ fprintf(stdout,"FORENSIC_DB=%s TABLES=%d HITS=%d\n",label,nt,found);
+}
 static void export_observations(sqlite3 *db,const char *usb){
  char dp[1024],ep[1024],sp[1024];
  snprintf(dp,sizeof(dp),"%s/F2_drink_statistics.tsv",usb);
@@ -141,7 +185,7 @@ int main(int argc,char **argv){
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.10-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.11-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
@@ -228,6 +272,23 @@ int main(int argc,char **argv){
  }
  export_observations(db,usb);
  probe_code5(db,usb);
+ char fpath[1024];snprintf(fpath,sizeof(fpath),"%s/F2_deep_forensics.tsv",usb);
+ FILE *ff=fopen(fpath,"wb");
+ if(ff){
+  fputs("База\tТаблица\tСтрока\tПоле\tСовпадение\tКонтекст\tСтатус\n",ff);
+  forensic(db,"machine.db",ff);
+  for(int i=3;i<argc&&i<16;i++){
+   sqlite3 *other=NULL;
+   if(sqlite3_open_v2(argv[i],&other,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL)==SQLITE_OK){
+    sqlite3_busy_timeout(other,1500);
+    const char *base=strrchr(argv[i],'/');base=base?base+1:argv[i];
+    forensic(other,base,ff);
+   }else fprintf(stdout,"FORENSIC_SKIP=%s\n",argv[i]);
+   if(other)sqlite3_close(other);
+  }
+  fclose(ff);
+ }
+
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
