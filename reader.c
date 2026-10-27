@@ -41,7 +41,7 @@ int main(int argc,char **argv){
  snprintf(settings_path,sizeof(settings_path),"%s/F2_settings.tsv",usb);
  FILE *sf=fopen(settings_path,"wb");
  if(sf){
-  fputs("Раздел\\tПараметр\\tЗначение\\tИсточник\\n",sf);
+  fputs("Раздел\tПараметр\tЗначение\tИсточник\n",sf);
   sqlite3_stmt *ss=NULL;
   if(sqlite3_prepare_v2(db,"SELECT * FROM yk_asset_setting",-1,&ss,NULL)==SQLITE_OK){
    int sr;
@@ -52,17 +52,17 @@ int main(int argc,char **argv){
     int secret=0;
     for(int i=0;i<4;i++)if(strcmp(k,keys[i])==0)secret=1;
     if(secret)continue;
-    fputs("Настройки\\t",sf);
-    for(const unsigned char *p=(const unsigned char*)k;*p;p++)fputc((*p=='\\t'||*p=='\\r'||*p=='\\n')?' ':*p,sf);
-    fputc('\\t',sf);
-    for(const unsigned char *p=(const unsigned char*)v;*p;p++)fputc((*p=='\\t'||*p=='\\r'||*p=='\\n')?' ':*p,sf);
-    fputs("\\tmachine.db/yk_asset_setting\\n",sf);
+    fputs("Настройки\t",sf);
+    for(const unsigned char *p=(const unsigned char*)k;*p;p++)fputc((*p=='\t'||*p=='\r'||*p=='\n')?' ':*p,sf);
+    fputc('\t',sf);
+    for(const unsigned char *p=(const unsigned char*)v;*p;p++)fputc((*p=='\t'||*p=='\r'||*p=='\n')?' ':*p,sf);
+    fputs("\tmachine.db/yk_asset_setting\n",sf);
    }
   }
   if(ss)sqlite3_finalize(ss);
   fclose(sf);
-  fprintf(stdout,"OK: %s\\n",settings_path);
- } else fprintf(stderr,"WARN: cannot create F2_settings.tsv: %s\\n",strerror(errno));
+  fprintf(stdout,"OK: %s\n",settings_path);
+ } else fprintf(stderr,"WARN: cannot create F2_settings.tsv: %s\n",strerror(errno));
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
