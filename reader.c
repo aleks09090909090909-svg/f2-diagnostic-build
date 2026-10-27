@@ -10,7 +10,7 @@ int main(int argc,char **argv){
  const char *usb=argc>2?argv[2]:"/mnt/nand_disk";
  sqlite3 *db=NULL;sqlite3_stmt *stmt=NULL;
  char vals[4][512]={{0}};int found[4]={0},rc,result=1;
- fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.5-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
+ fprintf(stdout,"F2_DIAGNOSTIC_VERSION=1.0.6-universal\nSQLITE_RUNTIME_VERSION=%s\n",sqlite3_libversion());
  rc=sqlite3_open_v2(dbpath,&db,SQLITE_OPEN_READONLY|SQLITE_OPEN_PRIVATECACHE,NULL);
  if(rc!=SQLITE_OK){fprintf(stderr,"ERROR: sqlite open: %s\n",db?sqlite3_errmsg(db):"unknown");goto out;}
  sqlite3_busy_timeout(db,10000);
@@ -35,6 +35,34 @@ int main(int argc,char **argv){
  if(fprintf(f,"\nConfidential - keep this file secure.\n")<0)ok=0;
  if(fflush(f)!=0)ok=0;if(fclose(f)!=0)ok=0;
  if(!ok||rename(tmp,path)!=0){fprintf(stderr,"ERROR: report write\n");remove(tmp);goto out;}
+
+ /* Export key/value settings as Excel-friendly TSV, excluding password fields. */
+ char settings_path[1024];
+ snprintf(settings_path,sizeof(settings_path),"%s/F2_settings.tsv",usb);
+ FILE *sf=fopen(settings_path,"wb");
+ if(sf){
+  fputs("Раздел\\tПараметр\\tЗначение\\tИсточник\\n",sf);
+  sqlite3_stmt *ss=NULL;
+  if(sqlite3_prepare_v2(db,"SELECT * FROM yk_asset_setting",-1,&ss,NULL)==SQLITE_OK){
+   int sr;
+   while((sr=sqlite3_step(ss))==SQLITE_ROW){
+    const char *k=(const char*)sqlite3_column_text(ss,0);
+    const char *v=(const char*)sqlite3_column_text(ss,1);
+    if(!k||!v)continue;
+    int secret=0;
+    for(int i=0;i<4;i++)if(strcmp(k,keys[i])==0)secret=1;
+    if(secret)continue;
+    fputs("Настройки\\t",sf);
+    for(const unsigned char *p=(const unsigned char*)k;*p;p++)fputc((*p=='\\t'||*p=='\\r'||*p=='\\n')?' ':*p,sf);
+    fputc('\\t',sf);
+    for(const unsigned char *p=(const unsigned char*)v;*p;p++)fputc((*p=='\\t'||*p=='\\r'||*p=='\\n')?' ':*p,sf);
+    fputs("\\tmachine.db/yk_asset_setting\\n",sf);
+   }
+  }
+  if(ss)sqlite3_finalize(ss);
+  fclose(sf);
+  fprintf(stdout,"OK: %s\\n",settings_path);
+ } else fprintf(stderr,"WARN: cannot create F2_settings.tsv: %s\\n",strerror(errno));
  fprintf(stdout,"OK: %s\n",path);result=0;
 out:
  if(stmt)sqlite3_finalize(stmt);if(db)sqlite3_close(db);return result;
