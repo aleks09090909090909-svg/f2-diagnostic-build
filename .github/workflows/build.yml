@@ -1,4 +1,4 @@
-name: Build F2 diagnostic 1.0.6 (glibc <= 2.26)
+name: Build F2 diagnostic 1.0.7 (glibc <= 2.26)
 on:
   push:
     branches: [main]
@@ -8,14 +8,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Prepare version 1.0.6
+      - name: Prepare version 1.0.7
         run: |
           python3 - <<'PY'
           from pathlib import Path
           p=Path('package.py')
           s=p.read_text()
-          assert 'Version: 1.0.6' in s
-          print('Package version is 1.0.6')
+          assert 'Version: 1.0.7' in s
+          print('Package version is 1.0.7')
           PY
       - name: Download SQLite on runner
         run: |
@@ -27,6 +27,12 @@ jobs:
           curl -fL --retry 3 -o zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
           tar -xf zig.tar.xz
           mv zig-linux-x86_64-0.13.0 zig
+      - name: Build static on-device XLSX exporter
+        run: |
+          ./zig/zig cc -target arm-linux-musleabihf -O2 -static -std=c11 -Wall -Wextra xlsx_writer.c -o f2_xlsx_writer
+          file f2_xlsx_writer
+          ! readelf -l f2_xlsx_writer | grep INTERP
+          ! readelf -d f2_xlsx_writer | grep NEEDED
       - name: Build fully static ARM musl SQLite reader
         run: |
           ./zig/zig cc -target arm-linux-musleabihf -O2 -static -DSQLITE_THREADSAFE=1 -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite sqlite/sqlite3.c reader.c -lm -o f2_recover_sqlite_static_arm
@@ -55,22 +61,24 @@ jobs:
         run: |
           python3 - <<'PY'
           import tarfile,io,pathlib
-          p=pathlib.Path('f2_service_diagnostic_1.0.6.drcoffee.ipk')
+          p=pathlib.Path('f2_service_diagnostic_1.0.7.drcoffee.ipk')
           assert p.exists() and p.stat().st_size>10000
           with tarfile.open(p) as f:
               assert {'./debian-binary','./control.tar.gz','./data.tar.gz'}.issubset(f.getnames())
               with tarfile.open(fileobj=io.BytesIO(f.extractfile('./data.tar.gz').read()),mode='r:gz') as t:
                   assert './usr/local/bin/f2_recover_sqlite_arm' in t.getnames()
                   assert './usr/local/bin/f2_recover_sqlite_static_arm' in t.getnames()
+                  assert './usr/local/bin/f2_xlsx_writer' in t.getnames()
           print('IPK OK:',p,p.stat().st_size)
           PY
       - uses: actions/upload-artifact@v4
         with:
-          name: F2-diagnostic-1.0.6-IPK
+          name: F2-diagnostic-1.0.7-IPK
           path: |
-            f2_service_diagnostic_1.0.6.drcoffee.ipk
+            f2_service_diagnostic_1.0.7.drcoffee.ipk
             f2_recover_sqlite_arm
             f2_recover_sqlite_static_arm
+            f2_xlsx_writer
             dependencies.txt
             symbol_versions.txt
 
