@@ -27,6 +27,10 @@ jobs:
           curl -fL --retry 3 -o zig.tar.xz https://ziglang.org/download/0.13.0/zig-linux-x86_64-0.13.0.tar.xz
           tar -xf zig.tar.xz
           mv zig-linux-x86_64-0.13.0 zig
+      - name: Build static drink counter
+        run: |
+          ./zig/zig cc -target arm-linux-musleabihf -O2 -static -DSQLITE_OMIT_LOAD_EXTENSION -I sqlite sqlite/sqlite3.c drink_counter_120.c -lm -o f2_drink_counter
+          file f2_drink_counter
       - name: Build static framebuffer probe
         run: |
           ./zig/zig cc -target arm-linux-musleabihf -O2 -static -std=c11 display_probe.c -o f2_display_probe
@@ -85,6 +89,7 @@ jobs:
             f2_recover_sqlite_static_arm
             f2_xlsx_writer
             f2_display_probe
+            f2_drink_counter
             dependencies.txt
             symbol_versions.txt
 
